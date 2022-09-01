@@ -14,7 +14,7 @@ class ArCLightBuilder(gegede.builder.Builder):
 
     """
 
-    def configure(self,WLS_dimension,SiPM_dimension,SiPM_Mask,SiPM_PCB,N_SiPM,N_Mask,**kwargs):
+    def configure(self,WLS_dimension,SiPM_dimension,SiPM_Mask,SiPM_PCB,N_SiPM,N_Mask,N_DCM,**kwargs):
 
         # Read dimensions form config file
         self.WLS_dx             = WLS_dimension['dx']
@@ -43,13 +43,14 @@ class ArCLightBuilder(gegede.builder.Builder):
 
         self.N_SiPM             = int(N_SiPM)
         self.N_Mask             = int(N_Mask)
+        self.N_DCM		        = int(N_DCM)
 
         # Material definitons
         self.WLS_Material       = 'EJ280WLS'
-        self.DCM_Material       = 'PSA'
+        self.DCM_Material       = 'LAr'
         self.TPB_Material       = 'TPB'
         self.SiPM_Material      = 'Silicon'
-        self.SiPM_Mask_Material = 'PVT'
+        self.SiPM_Mask_Material = 'G10'
         self.SiPM_PCB_Material  = 'FR4'
 
         self.Material           = 'LAr'
@@ -58,17 +59,29 @@ class ArCLightBuilder(gegede.builder.Builder):
         """ Construct the geometry.
 
         """
+        self.half_x = self.WLS_dx + self.SiPM_Mask_dx + self.SiPM_PCB_dx
+        self.half_y = self.SiPM_PCB_dy + (self.N_Mask-1)*self.SiPM_PCB_pitch
+        self.half_z = self.WLS_dz + self.TPB_dd
 
-        self.halfDimension      = { 'dx':   self.WLS_dx
-                                            +self.SiPM_Mask_dx
-                                            +self.SiPM_PCB_dx,
+        if self.N_DCM>2:
+            self.half_x += self.DCM_dd
+        if self.N_DCM>5:
+            self.half_z += self.DCM_dd
 
-                                    'dy':   self.SiPM_PCB_dy
-                                            +(self.N_Mask-1)*self.SiPM_PCB_pitch,
+        self.shift_x = self.SiPM_Mask_dx + self.SiPM_PCB_dx
+        self.shift_y = Q('0mm')
+        self.shift_z = -self.TPB_dd
 
-                                    'dz':   self.WLS_dz
-                                            +2*self.DCM_dd
-                                            +self.TPB_dd}
+        if self.N_DCM>2:
+            self.shift_x -= self.DCM_dd
+        if self.N_DCM>5:
+            self.shift_z += self.DCM_dd
+
+        self.halfDimension      = { 'dx':   self.half_x,
+
+                                    'dy':   self.half_y,
+
+                                    'dz':   self.half_z}
 
         main_lv, main_hDim = ltools.main_lv(self,geom,'Box')
         print('ArCLightBuilder::construct()')
@@ -86,7 +99,7 @@ class ArCLightBuilder(gegede.builder.Builder):
                                             shape=WLS_shape)
 
         # Place WLS panel into main LV
-        pos = [self.SiPM_Mask_dx+self.SiPM_PCB_dx,Q('0mm'),-self.TPB_dd]
+        pos = [self.shift_x,self.shift_y,self.shift_z]
 
         WLS_pos = geom.structure.Position('WLS_pos',
                                                 pos[0],pos[1],pos[2])
@@ -98,38 +111,70 @@ class ArCLightBuilder(gegede.builder.Builder):
         main_lv.placements.append(WLS_pla.name)
 
         # Construct DCM LV
-        DCM_shape = geom.shapes.Box('DCM_shape',
+        DCM_shape_xz = geom.shapes.Box('DCM_shape_xz',
+                                       dx = self.WLS_dx,
+                                       dy = self.DCM_dd,
+                                       dz = self.WLS_dz)
+
+        DCM_shape_yz = geom.shapes.Box('DCM_shape_yz',
+                                       dx = self.DCM_dd,
+                                       dy = self.WLS_dy,
+                                       dz = self.WLS_dz)
+
+        DCM_shape_xy = geom.shapes.Box('DCM_shape_xy',
                                        dx = self.WLS_dx,
                                        dy = self.WLS_dy,
                                        dz = self.DCM_dd)
 
-        DCM_lv = geom.structure.Volume('volDCM',
-                                            material=self.DCM_Material,
-                                            shape=DCM_shape)
+        DCM_lv_xz = geom.structure.Volume('volDCM_xz',
+                                            material=self.Material,
+                                            shape=DCM_shape_xz)
+        DCM_lv_yz = geom.structure.Volume('volDCM_yz',
+                                            material=self.Material,
+                                            shape=DCM_shape_yz)
+        DCM_lv_xy = geom.structure.Volume('volDCM_xy',
+                                            material=self.Material,
+                                            shape=DCM_shape_xy)
 
-        # Place inner DCM LV next to WLS Plane
-        pos = [self.SiPM_Mask_dx+self.SiPM_PCB_dx,Q('0mm'),self.WLS_dz+self.DCM_dd-self.TPB_dd]
+        # Place outer DCM LV next to WLS Plane (xy)
+        if self.N_DCM>=6:
+            pos = [self.shift_x,self.shift_y,self.shift_z-self.WLS_dz-self.DCM_dd]
 
-        DCM_pos = geom.structure.Position('DCM_pos_inner',
-                                                pos[0],pos[1],pos[2])
+            DCM_pos = geom.structure.Position('DCM_pos_outer',
+                                                    pos[0],pos[1],pos[2])
 
-        DCM_pla = geom.structure.Placement('DCM_pla_inner',
-                                                volume=DCM_lv,
-                                                pos=DCM_pos)
+            DCM_pla = geom.structure.Placement('DCM_pla_outer',
+                                                    volume=DCM_lv_xy,
+                                                    pos=DCM_pos)
 
-        main_lv.placements.append(DCM_pla.name)
+            main_lv.placements.append(DCM_pla.name)
 
-        # Place outer DCM LV next to WLS Plane
-        pos = [self.SiPM_Mask_dx+self.SiPM_PCB_dx,Q('0mm'),-self.WLS_dz-self.DCM_dd-self.TPB_dd]
+        # Place edge DCM LV next to WLS Plane
+        if self.N_DCM>2:
+            #xz
+            pos = [self.shift_x,self.shift_y+self.WLS_dy+self.DCM_dd,self.shift_z]
+            DCM_pos = geom.structure.Position('DCM_pos_edge_posY',
+                                                    pos[0],pos[1],pos[2])
+            DCM_pla = geom.structure.Placement('DCM_pla_edge_posY',
+                                                    volume=DCM_lv_xz,
+                                                    pos=DCM_pos)
+            main_lv.placements.append(DCM_pla.name)
+            pos = [self.shift_x,self.shift_y-self.WLS_dy-self.DCM_dd,self.shift_z]
+            DCM_pos = geom.structure.Position('DCM_pos_edge_negY',
+                                                    pos[0],pos[1],pos[2])
+            DCM_pla = geom.structure.Placement('DCM_pla_edge_negY',
+                                                    volume=DCM_lv_xz,
+                                                    pos=DCM_pos)
+            main_lv.placements.append(DCM_pla.name)
 
-        DCM_pos = geom.structure.Position('DCM_pos_outer',
-                                                pos[0],pos[1],pos[2])
-
-        DCM_pla = geom.structure.Placement('DCM_pla_outer',
-                                                volume=DCM_lv,
-                                                pos=DCM_pos)
-
-        main_lv.placements.append(DCM_pla.name)
+            #yz
+            pos = [self.shift_x+self.DCM_dd+self.WLS_dx,self.shift_y,self.shift_z]
+            DCM_pos = geom.structure.Position('DCM_pos_edge_posX',
+                                                    pos[0],pos[1],pos[2])
+            DCM_pla = geom.structure.Placement('DCM_pla_edge_posX',
+                                                    volume=DCM_lv_yz,
+                                                    pos=DCM_pos)
+            main_lv.placements.append(DCM_pla.name)
 
         # Construct TPB LV
         TPB_shape = geom.shapes.Box('TPB_LAr_shape',
@@ -143,7 +188,7 @@ class ArCLightBuilder(gegede.builder.Builder):
                                             shape=TPB_shape)
 
         # Place TPB LV next to DCM foil
-        pos = [self.SiPM_Mask_dx+self.SiPM_PCB_dx,Q('0mm'),self.WLS_dz+2*self.DCM_dd]
+        pos = [self.shift_x,self.shift_y,self.shift_z+self.WLS_dz+self.TPB_dd]
 
         TPB_pos = geom.structure.Position('TPB_pos',
                                                 pos[0],pos[1],pos[2])
@@ -176,7 +221,7 @@ class ArCLightBuilder(gegede.builder.Builder):
 
         # Place Mask LV next to WLS plane
         for n in range(self.N_Mask):
-            pos = [-self.WLS_dx+self.SiPM_PCB_dx,-(self.N_Mask-1)*self.SiPM_Mask_pitch+(2*n)*self.SiPM_Mask_pitch,-self.TPB_dd]
+            pos = [self.shift_x-self.WLS_dx-self.SiPM_Mask_dx,self.shift_y-(self.N_Mask-1)*self.SiPM_Mask_pitch+(2*n)*self.SiPM_Mask_pitch,self.shift_z]
 
             SiPM_Mask_pos = geom.structure.Position('SiPM_Mask_pos_'+str(n),
                                                     pos[0],pos[1],pos[2])
@@ -237,7 +282,7 @@ class ArCLightBuilder(gegede.builder.Builder):
 
         for n in range(self.N_Mask):
             # Place SiPM PCBs next to SiPM Masks
-            pos = [-self.WLS_dx-self.SiPM_Mask_dx,-(self.N_Mask-1)*self.SiPM_PCB_pitch+(2*n)*self.SiPM_PCB_pitch,-self.TPB_dd]
+            pos = [self.shift_x-self.SiPM_PCB_dx-self.WLS_dx-2*self.SiPM_Mask_dx,self.shift_y-(self.N_Mask-1)*self.SiPM_PCB_pitch+(2*n)*self.SiPM_PCB_pitch,self.shift_z]
 
             SiPM_PCB_pos = geom.structure.Position('SiPM_PCB_pos_'+str(n),
                                                     pos[0],pos[1],pos[2])
